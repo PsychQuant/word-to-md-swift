@@ -4,6 +4,9 @@ import OOXMLSwift
 import MarkdownSwift
 
 /// Word 轉 Markdown 轉換器
+///
+/// 遵循資訊下沉原則（docs/lossless-conversion.md §3.4）：
+/// 每個元素在能被表達的最低 Tier 中表達。
 public struct WordConverter: DocumentConverter {
     public static let sourceFormat = "docx"
 
@@ -24,23 +27,49 @@ public struct WordConverter: DocumentConverter {
         output: inout W,
         options: ConversionOptions = .default
     ) throws {
+        // 建立轉換上下文（收集 footnote definitions 等跨段落資訊）
+        var context = ConversionContext(document: document, options: options)
+
+        // Tier 3: 收集文件級 metadata
+        if options.fidelity == .marker {
+            context.metadataCollector = MetadataCollector()
+            context.metadataCollector?.collectDocument(document)
+        }
+
+        // Tier 2+: 初始化圖片提取器
+        if options.fidelity >= .markdownWithFigures, let figDir = options.figuresDirectory {
+            context.figureExtractor = FigureExtractor(directory: figDir)
+            try context.figureExtractor?.createDirectory()
+        }
+
         if options.includeFrontmatter {
             try writeFrontmatter(document: document, output: &output)
         }
 
-        for child in document.body.children {
+        for (index, child) in document.body.children.enumerated() {
             switch child {
             case .paragraph(let paragraph):
                 try processParagraph(
                     paragraph,
-                    styles: document.styles,
-                    numbering: document.numbering,
-                    output: &output,
-                    options: options
+                    context: &context,
+                    output: &output
                 )
             case .table(let table):
-                try processTable(table, output: &output, options: options)
+                try processTable(table, context: &context, output: &output)
             }
+
+            // Tier 3: 收集元素級 metadata
+            if options.fidelity == .marker {
+                context.metadataCollector?.collectElement(child, index: index)
+            }
+        }
+
+        // 輸出 footnote definitions（資訊下沉：footnotes 屬於 Tier 1）
+        try emitFootnoteDefinitions(context: context, output: &output)
+
+        // Tier 3: 寫出 metadata sidecar
+        if options.fidelity == .marker, let metaURL = options.metadataOutput {
+            try context.metadataCollector?.writeYAML(to: metaURL)
         }
     }
 
@@ -81,30 +110,68 @@ public struct WordConverter: DocumentConverter {
 
     private func processParagraph<W: DocConverterSwift.StreamingOutput>(
         _ paragraph: Paragraph,
-        styles: [Style],
-        numbering: Numbering,
-        output: inout W,
-        options: ConversionOptions
+        context: inout ConversionContext,
+        output: inout W
     ) throws {
-        let text = formatRuns(paragraph.runs)
+        // Horizontal rule: page break → ---（tier_min = 1）
+        if paragraph.hasPageBreak || paragraph.properties.pageBreakBefore {
+            try output.writeLine("---")
+            try output.writeBlankLine()
+            // 如果段落只有 page break 沒有文字，到此結束
+            if paragraph.runs.isEmpty && paragraph.hyperlinks.isEmpty {
+                return
+            }
+        }
 
-        // 空段落 → 跳過
-        if text.trimmingCharacters(in: CharacterSet.whitespaces).isEmpty {
+        // Code block 偵測（tier_min = 1）
+        if let styleName = paragraph.properties.style,
+           isCodeStyle(styleName, styles: context.styles) {
+            let rawText = collectPlainText(paragraph)
+            if !rawText.isEmpty {
+                // 收集連續的 code style 段落，累積成一個 code block
+                // 目前先簡單輸出單行 code block（用 fenced）
+                try output.writeLine("```")
+                try output.writeLine(rawText)
+                try output.writeLine("```")
+                try output.writeBlankLine()
+            }
             return
         }
 
-        // 檢查是否為標題
+        // Blockquote 偵測（tier_min = 1）
         if let styleName = paragraph.properties.style,
-           let headingLevel = detectHeadingLevel(styleName: styleName, styles: styles) {
+           isBlockquoteStyle(styleName, styles: context.styles) {
+            let text = formatParagraphContent(paragraph, context: &context)
+            if !text.trimmingCharacters(in: .whitespaces).isEmpty {
+                try output.writeLine("> \(text)")
+                try output.writeBlankLine()
+            }
+            return
+        }
+
+        let text = formatParagraphContent(paragraph, context: &context)
+
+        // 空段落 → 跳過
+        if text.trimmingCharacters(in: .whitespaces).isEmpty {
+            return
+        }
+
+        // Heading 偵測
+        if let styleName = paragraph.properties.style,
+           let headingLevel = detectHeadingLevel(styleName: styleName, styles: context.styles) {
             let prefix = String(repeating: "#", count: headingLevel)
             try output.writeLine("\(prefix) \(text)")
             try output.writeBlankLine()
             return
         }
 
-        // 檢查是否為清單項目
+        // List 偵測
         if let numInfo = paragraph.properties.numbering {
-            let isBullet = isListBullet(numId: numInfo.numId, level: numInfo.level, numbering: numbering)
+            let isBullet = isListBullet(
+                numId: numInfo.numId,
+                level: numInfo.level,
+                numbering: context.numbering
+            )
             let prefix = isBullet ? "- " : "1. "
             let indent = String(repeating: "  ", count: numInfo.level)
             try output.writeLine("\(indent)\(prefix)\(text)")
@@ -116,59 +183,235 @@ public struct WordConverter: DocumentConverter {
         try output.writeBlankLine()
     }
 
-    // MARK: - List Detection
+    // MARK: - Paragraph Content Formatting
 
-    /// 判斷是否為項目符號清單（bullet）
-    private func isListBullet(numId: Int, level: Int, numbering: Numbering) -> Bool {
-        // 找到對應的 Num
-        guard let num = numbering.nums.first(where: { $0.numId == numId }) else {
-            return true  // 預設為 bullet
+    /// 格式化段落完整內容：runs + hyperlinks + footnote refs + images
+    ///
+    /// 資訊下沉原則：hyperlinks、footnotes、inline images 都在 Tier 1 表達。
+    private func formatParagraphContent(
+        _ paragraph: Paragraph,
+        context: inout ConversionContext
+    ) -> String {
+        var result = ""
+
+        // 1. 格式化 runs（含 inline images、code spans、Layer B）
+        for run in paragraph.runs {
+            result += formatRun(run, context: &context)
         }
 
-        // 找到對應的 AbstractNum
-        guard let abstractNum = numbering.abstractNums.first(where: { $0.abstractNumId == num.abstractNumId }) else {
-            return true
+        // 2. 格式化 hyperlinks（tier_min = 1）
+        for hyperlink in paragraph.hyperlinks {
+            result += formatHyperlink(hyperlink, context: context)
         }
 
-        // 找到對應層級的 Level
-        guard let levelDef = abstractNum.levels.first(where: { $0.ilvl == level }) else {
-            return true
+        // 3. 插入 footnote references（tier_min = 1）
+        for footnoteId in paragraph.footnoteIds {
+            result += MarkdownInline.footnoteRef("\(footnoteId)")
+            // 註冊到 context，稍後輸出 definition
+            context.registerFootnote(id: footnoteId)
         }
 
-        // 判斷是否為 bullet
-        return levelDef.numFmt == .bullet
+        // 4. 插入 endnote references（合併為 footnote 語法，tier_min = 1）
+        for endnoteId in paragraph.endnoteIds {
+            let mappedId = "en\(endnoteId)"
+            result += MarkdownInline.footnoteRef(mappedId)
+            context.registerEndnote(id: endnoteId, mappedId: mappedId)
+        }
+
+        return result
     }
 
     // MARK: - Run Formatting
 
-    private func formatRuns(_ runs: [Run]) -> String {
-        var result = ""
-
-        for run in runs {
-            var text = run.text
-
-            // 跳過空文字
-            if text.isEmpty { continue }
-
-            // 套用格式（使用 MarkdownSwift）
-            let props = run.properties
-            if props.bold && props.italic {
-                text = MarkdownInline.boldItalic(text)
-            } else if props.bold {
-                text = MarkdownInline.bold(text)
-            } else if props.italic {
-                text = MarkdownInline.italic(text)
-            }
-
-            // 刪除線
-            if props.strikethrough {
-                text = MarkdownInline.strikethrough(text)
-            }
-
-            result += text
+    /// 格式化單一 Run
+    private func formatRun(
+        _ run: Run,
+        context: inout ConversionContext
+    ) -> String {
+        // Image（tier_min for reference = 1, tier_min for file = 2）
+        if let drawing = run.drawing {
+            return formatDrawing(drawing, context: &context)
         }
 
-        return result
+        var text = run.text
+
+        // 跳過空文字
+        if text.isEmpty { return "" }
+
+        let props = run.properties
+        let options = context.options
+
+        // Inline code 偵測（tier_min = 1）：semantic type 為 codeBlock
+        if let semantic = run.semantic, semantic.type == .codeBlock {
+            return MarkdownInline.code(text)
+        }
+
+        // Layer A: bold / italic / strikethrough（tier_min = 1）
+        if props.bold && props.italic {
+            text = MarkdownInline.boldItalic(text)
+        } else if props.bold {
+            text = MarkdownInline.bold(text)
+        } else if props.italic {
+            text = MarkdownInline.italic(text)
+        }
+
+        if props.strikethrough {
+            text = MarkdownInline.strikethrough(text)
+        }
+
+        // Layer B: HTML extensions（tier_min = 1 when enabled, otherwise 3）
+        if options.useHTMLExtensions {
+            if props.underline != nil {
+                text = MarkdownInline.rawHTML("<u>\(text)</u>")
+            }
+            if props.verticalAlign == .superscript {
+                text = MarkdownInline.rawHTML("<sup>\(text)</sup>")
+            }
+            if props.verticalAlign == .subscript {
+                text = MarkdownInline.rawHTML("<sub>\(text)</sub>")
+            }
+            if props.highlight != nil {
+                text = MarkdownInline.rawHTML("<mark>\(text)</mark>")
+            }
+        }
+
+        return text
+    }
+
+    // MARK: - Hyperlink Formatting
+
+    /// 格式化超連結（tier_min = 1）
+    private func formatHyperlink(
+        _ hyperlink: Hyperlink,
+        context: ConversionContext
+    ) -> String {
+        let text = hyperlink.text
+
+        switch hyperlink.type {
+        case .external:
+            // 外部連結：先查 hyperlinkReferences 取得 URL
+            if let url = hyperlink.url, !url.isEmpty {
+                return MarkdownInline.link(text, url: url)
+            }
+            // 透過 relationshipId 查詢
+            if let rId = hyperlink.relationshipId,
+               let ref = context.document.hyperlinkReferences.first(where: { $0.relationshipId == rId }) {
+                return MarkdownInline.link(text, url: ref.url)
+            }
+            return text
+
+        case .internal:
+            // 內部連結（書籤）
+            if let anchor = hyperlink.anchor {
+                return MarkdownInline.link(text, url: "#\(anchor)")
+            }
+            return text
+        }
+    }
+
+    // MARK: - Image / Drawing Formatting
+
+    /// 格式化圖片（reference tier_min = 1, file tier_min = 2）
+    private func formatDrawing(
+        _ drawing: Drawing,
+        context: inout ConversionContext
+    ) -> String {
+        let alt = drawing.description.isEmpty ? drawing.name : drawing.description
+
+        // 查找對應的 ImageReference
+        let imageRef = context.document.images.first { $0.id == drawing.imageId }
+
+        // Tier 2+: 提取圖片檔案
+        if context.options.fidelity >= .markdownWithFigures,
+           let imageRef = imageRef,
+           context.figureExtractor != nil {
+            if let relativePath = try? context.figureExtractor?.extract(imageRef) {
+                // Tier 3: 收集 figure metadata
+                if context.options.fidelity == .marker {
+                    context.metadataCollector?.collectFigure(drawing, imageRef: imageRef, path: relativePath)
+                }
+                return MarkdownInline.image(alt, url: relativePath)
+            }
+        }
+
+        // Tier 1: 僅放 reference（使用 imageId 作為 placeholder）
+        let fileName = imageRef?.fileName ?? drawing.imageId
+        return MarkdownInline.image(alt, url: fileName)
+    }
+
+    // MARK: - Footnote Definitions
+
+    /// 在文件末尾輸出所有 footnote / endnote definitions
+    private func emitFootnoteDefinitions<W: DocConverterSwift.StreamingOutput>(
+        context: ConversionContext,
+        output: inout W
+    ) throws {
+        let hasFootnotes = !context.referencedFootnoteIds.isEmpty
+        let hasEndnotes = !context.referencedEndnoteIds.isEmpty
+
+        guard hasFootnotes || hasEndnotes else { return }
+
+        try output.writeBlankLine()
+
+        // Footnotes
+        for id in context.referencedFootnoteIds.sorted() {
+            if let footnote = context.document.footnotes.footnotes.first(where: { $0.id == id }) {
+                try output.writeLine("[^\(id)]: \(footnote.text)")
+            }
+        }
+
+        // Endnotes（使用 mapped ID）
+        for (id, mappedId) in context.endnoteIdMapping.sorted(by: { $0.key < $1.key }) {
+            if let endnote = context.document.endnotes.endnotes.first(where: { $0.id == id }) {
+                try output.writeLine("[^\(mappedId)]: \(endnote.text)")
+            }
+        }
+    }
+
+    // MARK: - Style Detection
+
+    /// 偵測 code style（用於 inline code 和 code block）
+    private func isCodeStyle(_ styleName: String, styles: [Style]) -> Bool {
+        let lower = styleName.lowercased()
+        let codePatterns = ["code", "source", "listing", "verbatim", "preformatted"]
+        for pattern in codePatterns {
+            if lower.contains(pattern) { return true }
+        }
+        // 檢查繼承鏈
+        if let style = styles.first(where: { $0.id.lowercased() == lower }),
+           let basedOn = style.basedOn {
+            return isCodeStyle(basedOn, styles: styles)
+        }
+        return false
+    }
+
+    /// 偵測 blockquote style
+    private func isBlockquoteStyle(_ styleName: String, styles: [Style]) -> Bool {
+        let lower = styleName.lowercased()
+        let quotePatterns = ["quote", "block text"]
+        for pattern in quotePatterns {
+            if lower.contains(pattern) { return true }
+        }
+        if let style = styles.first(where: { $0.id.lowercased() == lower }),
+           let basedOn = style.basedOn {
+            return isBlockquoteStyle(basedOn, styles: styles)
+        }
+        return false
+    }
+
+    // MARK: - List Detection
+
+    private func isListBullet(numId: Int, level: Int, numbering: Numbering) -> Bool {
+        guard let num = numbering.nums.first(where: { $0.numId == numId }) else {
+            return true
+        }
+        guard let abstractNum = numbering.abstractNums.first(where: { $0.abstractNumId == num.abstractNumId }) else {
+            return true
+        }
+        guard let levelDef = abstractNum.levels.first(where: { $0.ilvl == level }) else {
+            return true
+        }
+        return levelDef.numFmt == .bullet
     }
 
     // MARK: - Heading Detection
@@ -176,7 +419,6 @@ public struct WordConverter: DocumentConverter {
     private func detectHeadingLevel(styleName: String, styles: [Style]) -> Int? {
         let lowerName = styleName.lowercased()
 
-        // 直接匹配標準樣式
         let headingPatterns: [(String, Int)] = [
             ("heading1", 1), ("heading 1", 1), ("標題 1", 1), ("標題1", 1),
             ("heading2", 2), ("heading 2", 2), ("標題 2", 2), ("標題2", 2),
@@ -193,7 +435,6 @@ public struct WordConverter: DocumentConverter {
             }
         }
 
-        // 檢查樣式繼承鏈
         if let style = styles.first(where: { $0.id.lowercased() == lowerName }),
            let basedOn = style.basedOn {
             return detectHeadingLevel(styleName: basedOn, styles: styles)
@@ -206,38 +447,33 @@ public struct WordConverter: DocumentConverter {
 
     private func processTable<W: DocConverterSwift.StreamingOutput>(
         _ table: Table,
-        output: inout W,
-        options: ConversionOptions
+        context: inout ConversionContext,
+        output: inout W
     ) throws {
         guard !table.rows.isEmpty else { return }
 
-        // 計算最大欄數
         let columnCount = table.rows.map { $0.cells.count }.max() ?? 0
         guard columnCount > 0 else { return }
 
-        // 正規化列（確保每列欄數相同）
         let normalizedRows = table.rows.map { row -> [String] in
             var cells = row.cells.map { cell -> String in
-                let content = cell.paragraphs.map { formatRuns($0.runs) }.joined(separator: " ")
-                // 使用 MarkdownSwift 跳脫表格儲存格
+                let content = cell.paragraphs.map { para in
+                    formatParagraphContent(para, context: &context)
+                }.joined(separator: " ")
                 return MarkdownEscaping.escape(content, context: .tableCell)
             }
-            // 補足欄數
             while cells.count < columnCount {
                 cells.append("")
             }
             return cells
         }
 
-        // 輸出標題列
         let headerRow = normalizedRows[0]
         try output.writeLine("| " + headerRow.joined(separator: " | ") + " |")
 
-        // 輸出分隔線
         let separator = Array(repeating: "---", count: columnCount)
         try output.writeLine("|" + separator.joined(separator: "|") + "|")
 
-        // 輸出資料列
         for row in normalizedRows.dropFirst() {
             try output.writeLine("| " + row.joined(separator: " | ") + " |")
         }
@@ -247,9 +483,53 @@ public struct WordConverter: DocumentConverter {
 
     // MARK: - Helpers
 
-    private func escapeYAML(_ text: String) -> String {
+    /// 收集段落純文字（不含格式，用於 code block）
+    private func collectPlainText(_ paragraph: Paragraph) -> String {
+        var text = paragraph.runs.map { $0.text }.joined()
+        for hyperlink in paragraph.hyperlinks {
+            text += hyperlink.text
+        }
         return text
+    }
+
+    private func escapeYAML(_ text: String) -> String {
+        text
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+}
+
+// MARK: - Conversion Context
+
+/// 轉換上下文：在整個文件轉換過程中共享的狀態
+struct ConversionContext {
+    let document: WordDocument
+    let options: ConversionOptions
+    var styles: [Style] { document.styles }
+    var numbering: Numbering { document.numbering }
+
+    // Footnote tracking
+    var referencedFootnoteIds: Set<Int> = []
+    var referencedEndnoteIds: Set<Int> = []
+    var endnoteIdMapping: [Int: String] = [:]  // endnoteId → mapped footnote id
+
+    // Tier 2+
+    var figureExtractor: FigureExtractor?
+
+    // Tier 3
+    var metadataCollector: MetadataCollector?
+
+    init(document: WordDocument, options: ConversionOptions) {
+        self.document = document
+        self.options = options
+    }
+
+    mutating func registerFootnote(id: Int) {
+        referencedFootnoteIds.insert(id)
+    }
+
+    mutating func registerEndnote(id: Int, mappedId: String) {
+        referencedEndnoteIds.insert(id)
+        endnoteIdMapping[id] = mappedId
     }
 }

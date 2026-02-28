@@ -8,8 +8,8 @@ let package = Package(
         .library(name: "WordToMDSwift", targets: ["WordToMDSwift"])
     ],
     dependencies: [
-        .package(url: "https://github.com/kiki830621/doc-converter-swift.git", from: "0.1.0"),
-        .package(url: "https://github.com/kiki830621/ooxml-swift.git", from: "0.2.0"),
+        .package(url: "https://github.com/kiki830621/doc-converter-swift.git", from: "0.2.0"),
+        .package(url: "https://github.com/kiki830621/ooxml-swift.git", from: "0.3.0"),
         .package(url: "https://github.com/kiki830621/markdown-swift.git", from: "0.1.0"),
     ],
     targets: [
@@ -23,8 +23,7 @@ let package = Package(
         ),
         .testTarget(
             name: "WordToMDSwiftTests",
-            dependencies: ["WordToMDSwift"],
-            resources: [.copy("Fixtures")]
+            dependencies: ["WordToMDSwift"]
         )
     ]
 )
