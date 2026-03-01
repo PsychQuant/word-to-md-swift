@@ -399,4 +399,180 @@ final class WordConverterTests: XCTestCase {
         let md = try convert(doc)
         XCTAssertFalse(md.contains("\n\n\n\n"), "Empty paragraphs should be skipped")
     }
+
+    // MARK: - Practical Mode: Heading Heuristic
+
+    func testHeadingHeuristicInfersFromFontSize() throws {
+        // 建立：3 段 body (fontSize 24 = 12pt)，1 段 heading (fontSize 36 = 18pt, bold)
+        let bodyRun = Run(text: "Body paragraph", properties: RunProperties(fontSize: 24))
+        let headingRun = Run(text: "Chapter Title", properties: RunProperties(bold: true, fontSize: 36))
+
+        let doc = makeDocument(paragraphs: [
+            Paragraph(runs: [headingRun]),
+            Paragraph(runs: [bodyRun]),
+            Paragraph(runs: [bodyRun]),
+            Paragraph(runs: [bodyRun]),
+        ])
+
+        // headingHeuristic 預設 true
+        let md = try convert(doc)
+        XCTAssertTrue(md.contains("# **Chapter Title**"), "Heading heuristic should infer H1. Got: \(md)")
+    }
+
+    func testHeadingHeuristicMultipleLevels() throws {
+        let bodyRun = Run(text: "Normal text", properties: RunProperties(fontSize: 24))
+        let h1Run = Run(text: "Main Title", properties: RunProperties(bold: true, fontSize: 48))
+        let h2Run = Run(text: "Sub Title", properties: RunProperties(bold: true, fontSize: 36))
+
+        let doc = makeDocument(paragraphs: [
+            Paragraph(runs: [h1Run]),
+            Paragraph(runs: [h2Run]),
+            Paragraph(runs: [bodyRun]),
+            Paragraph(runs: [bodyRun]),
+            Paragraph(runs: [bodyRun]),
+        ])
+
+        let md = try convert(doc)
+        XCTAssertTrue(md.contains("# **Main Title**"), "Should infer H1. Got: \(md)")
+        XCTAssertTrue(md.contains("## **Sub Title**"), "Should infer H2. Got: \(md)")
+    }
+
+    func testHeadingHeuristicDisabled() throws {
+        let bodyRun = Run(text: "Body text", properties: RunProperties(fontSize: 24))
+        let headingRun = Run(text: "Title", properties: RunProperties(bold: true, fontSize: 36))
+
+        let doc = makeDocument(paragraphs: [
+            Paragraph(runs: [headingRun]),
+            Paragraph(runs: [bodyRun]),
+            Paragraph(runs: [bodyRun]),
+            Paragraph(runs: [bodyRun]),
+        ])
+
+        var options = ConversionOptions.default
+        options.headingHeuristic = false
+        let md = try convert(doc, options: options)
+        XCTAssertFalse(md.contains("# Title"), "Heuristic disabled, no heading prefix. Got: \(md)")
+        XCTAssertTrue(md.contains("**Title**"), "Bold should still be applied. Got: \(md)")
+    }
+
+    func testHeadingHeuristicStyleBasedTakesPriority() throws {
+        // 有 Heading style 的段落不應被 heuristic 覆蓋
+        let bodyRun = Run(text: "Body text", properties: RunProperties(fontSize: 24))
+        let headingRun = Run(text: "Styled Heading", properties: RunProperties(bold: true, fontSize: 36))
+        var styledPara = Paragraph(runs: [headingRun])
+        styledPara.properties.style = "Heading2"
+
+        let doc = makeDocument(paragraphs: [
+            styledPara,
+            Paragraph(runs: [bodyRun]),
+            Paragraph(runs: [bodyRun]),
+            Paragraph(runs: [bodyRun]),
+        ])
+
+        let md = try convert(doc)
+        // style-based 偵測到 Heading2 → ##
+        XCTAssertTrue(md.contains("## **Styled Heading**"), "Style-based should take priority. Got: \(md)")
+        // contains("# **Styled") 會子字串匹配到 "## **Styled"，改用 line-level 檢查
+        let hasH1 = md.components(separatedBy: "\n").contains { $0 == "# **Styled Heading**" }
+        XCTAssertFalse(hasH1, "Should be H2, not H1. Got: \(md)")
+    }
+
+    // MARK: - Practical Mode: FigureExtractor EMF→PNG
+
+    func testFigureExtractorConvertsNonWebFriendly() throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("word-to-md-test-\(UUID().uuidString)")
+        let figDir = tmpDir.appendingPathComponent("figures")
+
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        // 建立一個 1x1 紅色像素的 PNG 作為測試圖片
+        let pngData = createTestPNGData()
+
+        // 模擬 EMF 檔（實際上是 PNG 資料，但副檔名是 .emf）
+        let imageRef = ImageReference(
+            id: "rId10",
+            fileName: "image1.emf",
+            contentType: "image/x-emf",
+            data: pngData
+        )
+
+        let drawing = Drawing(
+            type: .inline, width: 914400, height: 914400,
+            imageId: "rId10", name: "chart", description: "test chart"
+        )
+        var run = Run(text: "")
+        run.drawing = drawing
+
+        var doc = WordDocument()
+        doc.images = [imageRef]
+        doc.appendParagraph(Paragraph(runs: [run]))
+
+        let options = ConversionOptions(
+            fidelity: .markdownWithFigures,
+            figuresDirectory: figDir
+        )
+        let md = try converter.convertToString(document: doc, options: options)
+
+        // 應該輸出 .png 而非 .emf
+        XCTAssertTrue(md.contains("figures/image1.png"), "EMF should be converted to PNG. Got: \(md)")
+        XCTAssertFalse(md.contains("image1.emf"), "EMF extension should not appear. Got: \(md)")
+
+        // 確認檔案存在
+        let pngFile = figDir.appendingPathComponent("image1.png")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pngFile.path), "PNG file should exist at \(pngFile.path)")
+    }
+
+    func testFigureExtractorPreservesWebFriendly() throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("word-to-md-test-\(UUID().uuidString)")
+        let figDir = tmpDir.appendingPathComponent("figures")
+
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let pngData = createTestPNGData()
+
+        let imageRef = ImageReference(
+            id: "rId11",
+            fileName: "photo.png",
+            contentType: "image/png",
+            data: pngData
+        )
+
+        let drawing = Drawing(
+            type: .inline, width: 914400, height: 914400,
+            imageId: "rId11", name: "photo"
+        )
+        var run = Run(text: "")
+        run.drawing = drawing
+
+        var doc = WordDocument()
+        doc.images = [imageRef]
+        doc.appendParagraph(Paragraph(runs: [run]))
+
+        let options = ConversionOptions(
+            fidelity: .markdownWithFigures,
+            figuresDirectory: figDir
+        )
+        let md = try converter.convertToString(document: doc, options: options)
+
+        // PNG 應保持原始副檔名
+        XCTAssertTrue(md.contains("figures/photo.png"), "PNG should keep extension. Got: \(md)")
+    }
+
+    /// 建立最小的有效 PNG 資料（1x1 紅色像素）
+    private func createTestPNGData() -> Data {
+        #if canImport(AppKit)
+        let image = NSImage(size: NSSize(width: 1, height: 1))
+        image.lockFocus()
+        NSColor.red.set()
+        NSRect(x: 0, y: 0, width: 1, height: 1).fill()
+        image.unlockFocus()
+        let tiff = image.tiffRepresentation!
+        let bitmap = NSBitmapImageRep(data: tiff)!
+        return bitmap.representation(using: .png, properties: [:])!
+        #else
+        fatalError("AppKit required for test")
+        #endif
+    }
 }
