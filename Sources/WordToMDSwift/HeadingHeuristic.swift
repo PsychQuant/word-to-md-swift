@@ -9,9 +9,13 @@ import OOXMLSwift
 /// 4. 候選按大小排序 → H1, H2, H3...
 struct HeadingHeuristic {
     private var sizeToLevel: [Int: Int] = [:]  // fontSize (half-points) → heading level
+    private var styleMap: [String: Style] = [:] // styleId → Style（用於 resolve 繼承）
 
     /// 分析文件中的段落，建立 fontSize → heading level 對照表
     mutating func analyze(children: [BodyChild], styles: [Style]) {
+        // 建立 style lookup table
+        styleMap = Dictionary(uniqueKeysWithValues: styles.map { ($0.id, $0) })
+
         // 收集 font size 分佈
         var sizeCounts: [Int: Int] = [:]  // fontSize → 段落數
         var headingSizes: Set<Int> = []   // 候選 heading 的 size
@@ -40,12 +44,9 @@ struct HeadingHeuristic {
             guard let fontSize = effectiveFontSize(para),
                   fontSize > bodySize else { continue }
 
-            let isBold = para.runs.allSatisfy {
-                $0.properties.bold || $0.text.trimmingCharacters(in: .whitespaces).isEmpty
-            }
             let isShort = para.getText().count < 200
 
-            if isBold && isShort {
+            if effectiveBold(para) && isShort {
                 headingSizes.insert(fontSize)
             }
         }
@@ -64,23 +65,82 @@ struct HeadingHeuristic {
         guard let level = sizeToLevel[fontSize] else { return nil }
 
         // 額外驗證：bold + 段落短
-        let isBold = paragraph.runs.allSatisfy {
-            $0.properties.bold || $0.text.trimmingCharacters(in: .whitespaces).isEmpty
-        }
         let isShort = paragraph.getText().count < 200
-        guard isBold && isShort else { return nil }
+        guard effectiveBold(paragraph) && isShort else { return nil }
 
         return level
     }
 
     // MARK: - Private
 
-    /// 取得段落的有效 font size
+    /// 取得段落的有效 font size（先看 run-level，再 fallback 到 style 繼承鏈）
     private func effectiveFontSize(_ paragraph: Paragraph) -> Int? {
+        // 1. 先嘗試 run-level font size
         let sizes = paragraph.runs.compactMap { $0.properties.fontSize }
-        guard !sizes.isEmpty else { return nil }
-        // 如果所有 run 同 size，用該值；否則用最大值
-        return sizes.max()
+        if !sizes.isEmpty {
+            return sizes.max()
+        }
+        // 2. Fallback: 從段落的 style 繼承鏈取 fontSize
+        if let styleId = paragraph.properties.style {
+            return resolvedFontSize(styleId: styleId)
+        }
+        return nil
+    }
+
+    /// 判斷段落是否為粗體（先看 run-level，再 fallback 到 style 繼承鏈）
+    private func effectiveBold(_ paragraph: Paragraph) -> Bool {
+        let nonEmptyRuns = paragraph.runs.filter {
+            !$0.text.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        guard !nonEmptyRuns.isEmpty else { return false }
+
+        // 如果有任何 run 明確設定 bold，以 run-level 為準
+        let hasExplicitBold = nonEmptyRuns.contains { $0.properties.bold }
+        if hasExplicitBold {
+            return nonEmptyRuns.allSatisfy { $0.properties.bold }
+        }
+
+        // Fallback: 檢查 style 繼承鏈的 bold
+        if let styleId = paragraph.properties.style {
+            return resolvedBold(styleId: styleId)
+        }
+        return false
+    }
+
+    /// 從 style 繼承鏈解析 fontSize（遞迴查 basedOn）
+    private func resolvedFontSize(styleId: String) -> Int? {
+        var current: String? = styleId
+        var visited: Set<String> = []
+        while let id = current, !visited.contains(id) {
+            visited.insert(id)
+            if let style = styleMap[id] {
+                if let fontSize = style.runProperties?.fontSize {
+                    return fontSize
+                }
+                current = style.basedOn
+            } else {
+                break
+            }
+        }
+        return nil
+    }
+
+    /// 從 style 繼承鏈解析 bold
+    private func resolvedBold(styleId: String) -> Bool {
+        var current: String? = styleId
+        var visited: Set<String> = []
+        while let id = current, !visited.contains(id) {
+            visited.insert(id)
+            if let style = styleMap[id] {
+                if let rp = style.runProperties {
+                    return rp.bold
+                }
+                current = style.basedOn
+            } else {
+                break
+            }
+        }
+        return false
     }
 
     /// 檢查 style 是否為 heading（與 WordConverter.detectHeadingLevel 相同的模式）
