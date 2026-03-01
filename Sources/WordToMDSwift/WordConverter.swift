@@ -42,6 +42,13 @@ public struct WordConverter: DocumentConverter {
             try context.figureExtractor?.createDirectory()
         }
 
+        // Practical Mode: heading heuristic pre-scan
+        if options.headingHeuristic {
+            var heuristic = HeadingHeuristic()
+            heuristic.analyze(children: document.body.children, styles: document.styles)
+            context.headingHeuristic = heuristic
+        }
+
         if options.includeFrontmatter {
             try writeFrontmatter(document: document, output: &output)
         }
@@ -156,9 +163,16 @@ public struct WordConverter: DocumentConverter {
             return
         }
 
-        // Heading 偵測
+        // Heading 偵測（style-based 優先）
         if let styleName = paragraph.properties.style,
            let headingLevel = detectHeadingLevel(styleName: styleName, styles: context.styles) {
+            let prefix = String(repeating: "#", count: headingLevel)
+            try output.writeLine("\(prefix) \(text)")
+            try output.writeBlankLine()
+            return
+        }
+        // Heading heuristic fallback（Practical Mode）
+        else if let headingLevel = context.headingHeuristic?.inferLevel(for: paragraph) {
             let prefix = String(repeating: "#", count: headingLevel)
             try output.writeLine("\(prefix) \(text)")
             try output.writeBlankLine()
@@ -322,10 +336,14 @@ public struct WordConverter: DocumentConverter {
         let imageRef = context.document.images.first { $0.id == drawing.imageId }
 
         // Tier 2+: 提取圖片檔案
+        let preserveOriginal = context.options.preserveOriginalFormat
         if context.options.fidelity >= .markdownWithFigures,
            let imageRef = imageRef,
            context.figureExtractor != nil {
-            if let relativePath = try? context.figureExtractor?.extract(imageRef) {
+            if let relativePath = try? context.figureExtractor?.extract(
+                imageRef,
+                preserveOriginalFormat: preserveOriginal
+            ) {
                 // Tier 3: 收集 figure metadata
                 if context.options.fidelity == .marker {
                     context.metadataCollector?.collectFigure(drawing, imageRef: imageRef, path: relativePath)
@@ -515,6 +533,9 @@ struct ConversionContext {
 
     // Tier 2+
     var figureExtractor: FigureExtractor?
+
+    // Practical Mode
+    var headingHeuristic: HeadingHeuristic?
 
     // Tier 3
     var metadataCollector: MetadataCollector?
