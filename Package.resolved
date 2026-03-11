@@ -3,7 +3,7 @@
     {
       "identity" : "doc-converter-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/kiki830621/doc-converter-swift.git",
+      "location" : "https://github.com/PsychQuant/doc-converter-swift.git",
       "state" : {
         "revision" : "f25d82dec62e3484720b500aae64290639366ba8",
         "version" : "0.3.0"
@@ -12,7 +12,7 @@
     {
       "identity" : "markdown-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/kiki830621/markdown-swift.git",
+      "location" : "https://github.com/PsychQuant/markdown-swift.git",
       "state" : {
         "revision" : "1995a4dde95afa95408c6ebb8dab36cc0c2f8c32",
         "version" : "0.1.0"
@@ -21,10 +21,10 @@
     {
       "identity" : "ooxml-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/kiki830621/ooxml-swift.git",
+      "location" : "https://github.com/PsychQuant/ooxml-swift.git",
       "state" : {
-        "revision" : "a1411ab519277839ae3a4b4228f1e74175ed7926",
-        "version" : "0.5.1"
+        "revision" : "f10e80432c46796062470064c277f971539f175d",
+        "version" : "0.5.3"
       }
     },
     {

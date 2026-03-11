@@ -232,6 +232,32 @@ public struct WordConverter: DocumentConverter {
             context.registerEndnote(id: endnoteId, mappedId: mappedId)
         }
 
+        // Post-process: merge adjacent runs with same formatting
+        // Word splits text into multiple runs even when formatting is identical.
+        // This causes "**text1****text2**" instead of "**text1text2**".
+        result = mergeAdjacentFormatting(result)
+
+        return result
+    }
+
+    // MARK: - Adjacent Formatting Merge
+
+    /// 合併相鄰的同類格式標記
+    ///
+    /// Word 內部常把同格式文字拆成多個 runs（因 revision tracking、語言標記等），
+    /// 導致輸出如 `**JSPS ****International ****Fellowships**`。
+    /// 此函數將相鄰的 bold/italic/strikethrough 結束+開始標記合併。
+    private func mergeAdjacentFormatting(_ text: String) -> String {
+        var result = text
+        // Bold-italic close+open: ***text1******text2*** → ***text1text2***
+        result = result.replacingOccurrences(of: "******", with: "")
+        // Bold close+open: **text1****text2** → **text1text2**
+        result = result.replacingOccurrences(of: "****", with: "")
+        // Italic close+open: *text1**text2* → *text1text2*
+        // Note: only merge single-asterisk pairs, not bold markers
+        // This is handled by processing longer patterns first (above)
+        // Strikethrough close+open: ~~text1~~~~text2~~ → ~~text1text2~~
+        result = result.replacingOccurrences(of: "~~~~", with: "")
         return result
     }
 

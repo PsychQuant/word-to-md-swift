@@ -61,6 +61,55 @@ final class WordConverterTests: XCTestCase {
         XCTAssertTrue(md.contains("**strong**"))
     }
 
+    func testAdjacentBoldRunsMerged() throws {
+        // Simulates Word splitting "JSPS International Fellowships" into 3 bold runs
+        let runs = [
+            Run(text: "JSPS ", properties: RunProperties(bold: true)),
+            Run(text: "International ", properties: RunProperties(bold: true)),
+            Run(text: "Fellowships", properties: RunProperties(bold: true)),
+        ]
+        let doc = makeDocument(paragraph: Paragraph(runs: runs))
+        let md = try convert(doc)
+        XCTAssertTrue(md.contains("**JSPS International Fellowships**"),
+                      "Adjacent bold runs should be merged. Got: \(md)")
+        XCTAssertFalse(md.contains("****"),
+                       "Should not contain adjacent bold markers. Got: \(md)")
+    }
+
+    func testAdjacentStrikethroughRunsMerged() throws {
+        let runs = [
+            Run(text: "deleted ", properties: RunProperties(strikethrough: true)),
+            Run(text: "text", properties: RunProperties(strikethrough: true)),
+        ]
+        let doc = makeDocument(paragraph: Paragraph(runs: runs))
+        let md = try convert(doc)
+        XCTAssertTrue(md.contains("~~deleted text~~"))
+        XCTAssertFalse(md.contains("~~~~"))
+    }
+
+    func testAdjacentBoldItalicRunsMerged() throws {
+        let runs = [
+            Run(text: "bold ", properties: RunProperties(bold: true, italic: true)),
+            Run(text: "italic", properties: RunProperties(bold: true, italic: true)),
+        ]
+        let doc = makeDocument(paragraph: Paragraph(runs: runs))
+        let md = try convert(doc)
+        XCTAssertTrue(md.contains("***bold italic***"))
+        XCTAssertFalse(md.contains("******"))
+    }
+
+    func testMixedFormattingNotMerged() throws {
+        // Bold followed by italic should NOT be merged
+        let runs = [
+            Run(text: "bold", properties: RunProperties(bold: true)),
+            Run(text: "italic", properties: RunProperties(italic: true)),
+        ]
+        let doc = makeDocument(paragraph: Paragraph(runs: runs))
+        let md = try convert(doc)
+        XCTAssertTrue(md.contains("**bold**"))
+        XCTAssertTrue(md.contains("_italic_"))
+    }
+
     func testItalic() throws {
         let run = Run(text: "emphasis", properties: RunProperties(italic: true))
         let doc = makeDocument(paragraph: Paragraph(runs: [run]))
