@@ -1,6 +1,6 @@
 import XCTest
 import OOXMLSwift
-import DocConverterSwift
+import CommonConverterSwift
 @testable import WordToMDSwift
 
 final class WordConverterTests: XCTestCase {

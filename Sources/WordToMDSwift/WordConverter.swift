@@ -1,5 +1,5 @@
 import Foundation
-import DocConverterSwift
+import CommonConverterSwift
 import OOXMLSwift
 import MarkdownSwift
 
@@ -12,7 +12,7 @@ public struct WordConverter: DocumentConverter {
 
     public init() {}
 
-    public func convert<W: DocConverterSwift.StreamingOutput>(
+    public func convert<W: CommonConverterSwift.StreamingOutput>(
         input: URL,
         output: inout W,
         options: ConversionOptions
@@ -22,7 +22,7 @@ public struct WordConverter: DocumentConverter {
     }
 
     /// 直接從 WordDocument 轉換（供 MCP 等已載入文件的場景使用）
-    public func convert<W: DocConverterSwift.StreamingOutput>(
+    public func convert<W: CommonConverterSwift.StreamingOutput>(
         document: WordDocument,
         output: inout W,
         options: ConversionOptions = .default
@@ -85,14 +85,14 @@ public struct WordConverter: DocumentConverter {
         document: WordDocument,
         options: ConversionOptions = .default
     ) throws -> String {
-        var writer = DocConverterSwift.StringOutput()
+        var writer = CommonConverterSwift.StringOutput()
         try convert(document: document, output: &writer, options: options)
         return writer.content
     }
 
     // MARK: - Frontmatter
 
-    private func writeFrontmatter<W: DocConverterSwift.StreamingOutput>(
+    private func writeFrontmatter<W: CommonConverterSwift.StreamingOutput>(
         document: WordDocument,
         output: inout W
     ) throws {
@@ -115,7 +115,7 @@ public struct WordConverter: DocumentConverter {
 
     // MARK: - Paragraph Processing
 
-    private func processParagraph<W: DocConverterSwift.StreamingOutput>(
+    private func processParagraph<W: CommonConverterSwift.StreamingOutput>(
         _ paragraph: Paragraph,
         context: inout ConversionContext,
         output: inout W
@@ -386,7 +386,7 @@ public struct WordConverter: DocumentConverter {
     // MARK: - Footnote Definitions
 
     /// 在文件末尾輸出所有 footnote / endnote definitions
-    private func emitFootnoteDefinitions<W: DocConverterSwift.StreamingOutput>(
+    private func emitFootnoteDefinitions<W: CommonConverterSwift.StreamingOutput>(
         context: ConversionContext,
         output: inout W
     ) throws {
@@ -489,7 +489,7 @@ public struct WordConverter: DocumentConverter {
 
     // MARK: - Table Processing
 
-    private func processTable<W: DocConverterSwift.StreamingOutput>(
+    private func processTable<W: CommonConverterSwift.StreamingOutput>(
         _ table: Table,
         context: inout ConversionContext,
         output: inout W
