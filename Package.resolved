@@ -1,9 +1,9 @@
 {
   "pins" : [
     {
-      "identity" : "doc-converter-swift",
+      "identity" : "common-converter-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/PsychQuant/doc-converter-swift.git",
+      "location" : "https://github.com/PsychQuant/common-converter-swift.git",
       "state" : {
         "revision" : "53400b2032389962dc5a10d135644b21d3cf1e06",
         "version" : "0.4.0"
@@ -23,8 +23,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/PsychQuant/ooxml-swift.git",
       "state" : {
-        "revision" : "f10e80432c46796062470064c277f971539f175d",
-        "version" : "0.5.3"
+        "revision" : "8afc00a80af87359b00374ddbdfe108cdd67649a",
+        "version" : "0.15.0"
       }
     },
     {

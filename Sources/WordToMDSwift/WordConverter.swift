@@ -54,16 +54,7 @@ public struct WordConverter: DocumentConverter {
         }
 
         for (index, child) in document.body.children.enumerated() {
-            switch child {
-            case .paragraph(let paragraph):
-                try processParagraph(
-                    paragraph,
-                    context: &context,
-                    output: &output
-                )
-            case .table(let table):
-                try processTable(table, context: &context, output: &output)
-            }
+            try processBodyChild(child, context: &context, output: &output)
 
             // Tier 3: 收集元素級 metadata
             if options.fidelity == .marker {
@@ -111,6 +102,29 @@ public struct WordConverter: DocumentConverter {
 
         try output.writeLine("---")
         try output.writeBlankLine()
+    }
+
+    // MARK: - Body Child Dispatch
+
+    /// Recursive dispatcher for BodyChild kinds. Handles paragraph, table,
+    /// and block-level ContentControl wrappers (ooxml-swift v0.15.0+).
+    /// Block-level SDTs are transparent to Markdown — children are emitted
+    /// in order; the SDT wrapper itself produces no Markdown output.
+    private func processBodyChild<W: CommonConverterSwift.StreamingOutput>(
+        _ child: BodyChild,
+        context: inout ConversionContext,
+        output: inout W
+    ) throws {
+        switch child {
+        case .paragraph(let paragraph):
+            try processParagraph(paragraph, context: &context, output: &output)
+        case .table(let table):
+            try processTable(table, context: &context, output: &output)
+        case .contentControl(_, children: let children):
+            for c in children {
+                try processBodyChild(c, context: &context, output: &output)
+            }
+        }
     }
 
     // MARK: - Paragraph Processing

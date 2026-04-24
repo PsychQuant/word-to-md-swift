@@ -82,6 +82,10 @@ struct MetadataCollector {
             collectParagraph(para, index: index)
         case .table(let table):
             collectTable(table, index: index)
+        case .contentControl(_, children: let children):
+            // Block-level SDT wrapper is transparent for metadata — collect
+            // each child element with the same index. (ooxml-swift v0.15.0+)
+            for c in children { collectElement(c, index: index) }
         }
     }
 
