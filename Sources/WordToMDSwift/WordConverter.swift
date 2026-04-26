@@ -124,6 +124,10 @@ public struct WordConverter: DocumentConverter {
             for c in children {
                 try processBodyChild(c, context: &context, output: &output)
             }
+        case .bookmarkMarker, .rawBlockElement:
+            // Body-level markers (ooxml-swift v0.19.6+ for #58) emit no
+            // Markdown — they carry structural anchors only.
+            break
         }
     }
 

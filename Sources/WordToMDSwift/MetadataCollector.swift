@@ -86,6 +86,10 @@ struct MetadataCollector {
             // Block-level SDT wrapper is transparent for metadata — collect
             // each child element with the same index. (ooxml-swift v0.15.0+)
             for c in children { collectElement(c, index: index) }
+        case .bookmarkMarker, .rawBlockElement:
+            // Body-level markers (ooxml-swift v0.19.6+ for #58) carry no
+            // user-visible content — no metadata to collect.
+            break
         }
     }
 
