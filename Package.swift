@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "WordToMDSwift",
+    name: "WordToMD",
     platforms: [.macOS(.v13)],
     products: [
-        .library(name: "WordToMDSwift", targets: ["WordToMDSwift"])
+        .library(name: "WordToMD", targets: ["WordToMD"])
     ],
     dependencies: [
         .package(url: "https://github.com/PsychQuant/common-converter-swift.git", from: "0.4.0"),
@@ -14,7 +14,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "WordToMDSwift",
+            name: "WordToMD",
             dependencies: [
                 .product(name: "CommonConverterSwift", package: "common-converter-swift"),
                 .product(name: "OOXMLSwift", package: "ooxml-swift"),
@@ -22,8 +22,8 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "WordToMDSwiftTests",
-            dependencies: ["WordToMDSwift"]
+            name: "WordToMDTests",
+            dependencies: ["WordToMD"]
         )
     ]
 )

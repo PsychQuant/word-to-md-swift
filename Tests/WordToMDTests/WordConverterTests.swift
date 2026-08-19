@@ -1,7 +1,7 @@
 import XCTest
 import OOXMLSwift
 import CommonConverterSwift
-@testable import WordToMDSwift
+@testable import WordToMD
 
 final class WordConverterTests: XCTestCase {
     let converter = WordConverter()

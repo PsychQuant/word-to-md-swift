@@ -1,6 +1,6 @@
 import XCTest
 import OOXMLSwift
-@testable import WordToMDSwift
+@testable import WordToMD
 
 final class MetadataCollectorTests: XCTestCase {
 

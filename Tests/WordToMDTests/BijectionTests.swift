@@ -1,7 +1,7 @@
 import XCTest
 import OOXMLSwift
 import CommonConverterSwift
-@testable import WordToMDSwift
+@testable import WordToMD
 
 /// Bijection 驗證：不同的 Word 文件必須產生不同的 Tier 3 輸出。
 ///
