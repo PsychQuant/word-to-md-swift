@@ -38,6 +38,40 @@ final class ParagraphFingerprintTests: XCTestCase {
         XCTAssertEqual(ParagraphFingerprint.compute("important"), "4f2844fb7985d8e5")
     }
 
+    // MARK: - Typographic canonicalization (swift-markdown's default "smart
+    // punctuation" — see ParagraphFingerprint's doc comment)
+
+    func testFingerprintCanonicalizesApostrophe() {
+        XCTAssertEqual(ParagraphFingerprint.compute("This paragraph's real text."), "dea38bc387d1a018")
+    }
+
+    func testFingerprintOfCurlyApostropheMatchesStraightApostrophe() {
+        // U+2019 RIGHT SINGLE QUOTATION MARK — what swift-markdown produces
+        // when it re-parses a straight apostrophe under its default "smart"
+        // option set.
+        XCTAssertEqual(
+            ParagraphFingerprint.compute("This paragraph\u{2019}s real text."),
+            "dea38bc387d1a018"
+        )
+    }
+
+    func testFingerprintCanonicalizesDashesAndEllipsisAndDoubleQuotes() {
+        XCTAssertEqual(
+            ParagraphFingerprint.compute("He said \"hello\" -- then left..."),
+            "a00291c1039d1aab"
+        )
+    }
+
+    func testFingerprintOfFullyTypographicVariantMatchesASCIIVariant() {
+        // U+201C/U+201D curly double quotes, U+2013 en dash, U+2026 ellipsis
+        // — exactly what swift-markdown produces from the ASCII sequence
+        // above under its default "smart" option set.
+        XCTAssertEqual(
+            ParagraphFingerprint.compute("He said \u{201C}hello\u{201D} \u{2013} then left\u{2026}"),
+            "a00291c1039d1aab"
+        )
+    }
+
     // MARK: - Content-drift sensitivity (the actual purpose of the feature)
 
     func testDifferentTextProducesDifferentFingerprint() {
@@ -73,5 +107,56 @@ final class ParagraphFingerprintTests: XCTestCase {
             ParagraphFingerprint.compute("Trailing space "),
             ParagraphFingerprint.compute("Trailing space")
         )
+    }
+
+    // MARK: - computeExact: byte-exact, NO normalization at all
+    // (the fix for the offset-safety gap a Codex review round 1 finding
+    // identified in `compute(_:)` — see ParagraphFingerprint's doc comment)
+
+    func testComputeExactSharedLiteralVectors() {
+        XCTAssertEqual(ParagraphFingerprint.computeExact("Hello, world!"), "38d1334144987bf4")
+        XCTAssertEqual(ParagraphFingerprint.computeExact("This paragraph's real text."), "dea38bc387d1a018")
+        XCTAssertEqual(ParagraphFingerprint.computeExact("A  B"), "96396e8c37aad7ca")
+        XCTAssertEqual(ParagraphFingerprint.computeExact("A B"), "fa95d919a0cae6d2")
+        XCTAssertEqual(ParagraphFingerprint.computeExact("a---bc"), "733503084b18a8c2")
+        XCTAssertEqual(ParagraphFingerprint.computeExact("a\u{2014}bc"), "ba79b701407cd4b5")
+        XCTAssertEqual(ParagraphFingerprint.computeExact(""), "cbf29ce484222325")
+    }
+
+    func testComputeExactDoesNotToleratesWhitespaceDifferences() {
+        // Unlike compute(_:), computeExact(_:) must NOT collapse whitespace —
+        // "A  B" and "A B" have different lengths, so offsets captured
+        // against one are not valid against the other.
+        XCTAssertNotEqual(
+            ParagraphFingerprint.computeExact("A  B"),
+            ParagraphFingerprint.computeExact("A B")
+        )
+        // Sanity: the loose fingerprint DOES still consider them equal —
+        // pins the documented divergence between the two functions.
+        XCTAssertEqual(
+            ParagraphFingerprint.compute("A  B"),
+            ParagraphFingerprint.compute("A B")
+        )
+    }
+
+    func testComputeExactDoesNotToleratesTypographicSubstitution() {
+        // Unlike compute(_:), computeExact(_:) must NOT canonicalize smart
+        // punctuation — "a---bc" (6 chars) and "a—bc" (4 chars, em dash)
+        // have different lengths, so a RunMeta.range offset valid against
+        // one is not necessarily valid (or could land on different text)
+        // against the other.
+        XCTAssertNotEqual(
+            ParagraphFingerprint.computeExact("a---bc"),
+            ParagraphFingerprint.computeExact("a\u{2014}bc")
+        )
+        XCTAssertEqual(
+            ParagraphFingerprint.compute("a---bc"),
+            ParagraphFingerprint.compute("a\u{2014}bc")
+        )
+    }
+
+    func testComputeExactMatchesForByteIdenticalText() {
+        let text = "Byte-identical text, unchanged."
+        XCTAssertEqual(ParagraphFingerprint.computeExact(text), ParagraphFingerprint.computeExact(text))
     }
 }
