@@ -195,4 +195,27 @@ final class BijectionTests: XCTestCase {
         XCTAssertTrue(resultA.metadata.contains("single"))
         XCTAssertTrue(resultB.metadata.contains("double"))
     }
+
+    // MARK: - lineRule Difference (PsychQuant/macdoc#220 item 1)
+
+    /// 固定行高 vs 最小行高：Markdown 相同，metadata 必須區分 exact vs atLeast
+    func testLineRuleDifferenceCapturedInMetadata() throws {
+        var docA = WordDocument()
+        var paraA = Paragraph(text: "line ruled")
+        paraA.properties.spacing = Spacing(line: 360, lineRule: .exact)
+        docA.appendParagraph(paraA)
+
+        var docB = WordDocument()
+        var paraB = Paragraph(text: "line ruled")
+        paraB.properties.spacing = Spacing(line: 360, lineRule: .atLeast)
+        docB.appendParagraph(paraB)
+
+        let resultA = try convertTier3(docA)
+        let resultB = try convertTier3(docB)
+
+        XCTAssertEqual(resultA.markdown, resultB.markdown)
+        XCTAssertNotEqual(resultA.metadata, resultB.metadata)
+        XCTAssertTrue(resultA.metadata.contains("lineRule: exact"))
+        XCTAssertTrue(resultB.metadata.contains("lineRule: atLeast"))
+    }
 }
