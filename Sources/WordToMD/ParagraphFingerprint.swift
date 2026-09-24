@@ -118,6 +118,19 @@ import Foundation
 ///   checksum: it is deliberately insensitive to the noise above while
 ///   staying sensitive to any edit a human or tool made to the paragraph's
 ///   actual wording.
+///
+/// ## Hash collisions (Codex round 2 NEW-3)
+///
+/// FNV-1a 64-bit is not a cryptographic hash and is not injective: two
+/// different texts could, in principle, hash to the same digest. A match on
+/// either `compute(_:)` or `computeExact(_:)` is therefore strong practical
+/// evidence of equality (over the relevant text universe, a 64-bit digest
+/// makes an accidental collision astronomically unlikely), not a
+/// mathematical proof. This is an acceptable trade-off for a
+/// misalignment/offset-safety check — not a security boundary — but the
+/// doc comments elsewhere in this file that say a match "guarantees"
+/// equality should be read with this caveat in mind rather than taken
+/// literally.
 enum ParagraphFingerprint {
     /// Unicode "smart punctuation" scalar → canonical ASCII replacement.
     /// See the "Smart punctuation" bullet above for why this exists.
@@ -142,11 +155,13 @@ enum ParagraphFingerprint {
 
     /// Computes the "exact" fingerprint: hashes `runsText` with NO
     /// normalization at all (not NFC, not whitespace collapsing, not
-    /// typographic canonicalization) — two texts sharing this fingerprint
-    /// are guaranteed character-for-character (Swift `Character`, i.e.
-    /// extended-grapheme-cluster) identical.
+    /// typographic canonicalization) — a match is strong (FNV-1a 64-bit,
+    /// practically collision-free for this use case) but not
+    /// mathematically-proof evidence the two texts are scalar-for-scalar
+    /// identical, the same caveat any fixed-width non-cryptographic hash
+    /// carries (see the top-level doc comment's "Hash collisions" note).
     ///
-    /// This is the fingerprint `RunMeta.range` character-offset restoration
+    /// This is the fingerprint `RunMeta.range` scalar-offset restoration
     /// (macdoc #220 item 4) must gate on, NOT `compute(_:)` above. Both
     /// whitespace collapsing and typographic canonicalization are
     /// *length-changing* transformations (e.g. `"  "` → `" "`, or `"---"`
@@ -160,8 +175,8 @@ enum ParagraphFingerprint {
     /// both strings is identical, but `[4, 5)` against `"a—bc"` is out of
     /// bounds (length 4) — or, with more trailing text, could land on a
     /// *different* character than `"b"` entirely, silently formatting the
-    /// wrong text. `computeExact` closes that gap: it only reports a match
-    /// when the offsets are guaranteed still valid.
+    /// wrong text. `computeExact` closes that gap: a match means the
+    /// offsets are (for all practical purposes) still valid.
     static func computeExact(_ runsText: String) -> String {
         fnv1a64Hex(runsText)
     }
