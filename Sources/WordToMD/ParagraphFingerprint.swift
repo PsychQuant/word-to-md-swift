@@ -30,24 +30,46 @@ import Foundation
 /// *same* text `MetadataCollector.collectParagraph` already walks to
 /// compute `RunMeta.range` character offsets (top-level runs only;
 /// hyperlink / footnote / SDT text is deliberately excluded, matching
-/// `RunMeta`'s existing scope). This means a fingerprint match also
-/// guarantees `RunMeta.range` offsets are valid against the corresponding
-/// reverse-converted paragraph's own `runs`-only text — the per-run
-/// restoration (macdoc #220 item 4) depends on this alignment.
+/// `RunMeta`'s existing scope).
 ///
-/// ## Normalization
+/// ## Two fingerprints, two different guarantees — do not conflate them
+///
+/// `compute(_:)` and `computeExact(_:)` below serve different purposes and
+/// are stored as two separate `ParagraphMeta` fields
+/// (`textFingerprint` / `exactTextFingerprint`):
+///
+/// - `compute(_:)` ("loose") tolerates markdown-round-trip noise
+///   (whitespace collapsing, typographic canonicalization) — appropriate
+///   for "is this still roughly the same paragraph" misalignment detection
+///   (macdoc #220 item 5), which gates paragraph-*level* fields
+///   (alignment/spacing/etc. — none of which depend on character offsets).
+/// - `computeExact(_:)` requires byte-for-byte identical text — this is
+///   the ONLY fingerprint that guarantees `RunMeta.range` character offsets
+///   are still valid, because the loose fingerprint's normalization steps
+///   are length-changing and can silently shift or invalidate offsets even
+///   when it matches. Per-run restoration (macdoc #220 item 4) MUST gate on
+///   `computeExact`, not `compute`. See `computeExact`'s own doc comment
+///   for a concrete worked example of why the loose fingerprint is unsafe
+///   for this.
+///
+/// ## Normalization (applies to `compute(_:)` only — `computeExact(_:)`
+/// ## applies none of it)
 ///
 /// 1. Unicode NFC normalize (`precomposedStringWithCanonicalMapping`).
-/// 2. Collapse every run of Unicode whitespace/newline characters to a
+/// 2. **Typographic canonicalization**: fold "smart punctuation" variants
+///    down to their plain-ASCII equivalents — curly single/double quotes to
+///    `'`/`"`, en dash (U+2013) to `--`, em dash (U+2014) to `---`,
+///    horizontal ellipsis (U+2026) to `...`. See rationale below.
+/// 3. Collapse every run of Unicode whitespace/newline characters to a
 ///    single ASCII space.
-/// 3. Trim leading/trailing whitespace.
-/// 4. Hash the normalized text with FNV-1a (64-bit), rendered as 16
+/// 4. Trim leading/trailing whitespace.
+/// 5. Hash the normalized text with FNV-1a (64-bit), rendered as 16
 ///    lowercase hex digits.
 ///
 /// ## Why normalize at all — what markdown round-tripping changes, and
 /// what it does not
 ///
-/// - **Markdown escaping (`\*`, `\_`, `` \` ``, …) is not a source of
+/// - **Markdown escaping (backslash before `*_` etc.) is not a source of
 ///   difference here.** `WordConverter` escapes special characters only
 ///   when *serializing* a run's text into the `.md` file
 ///   (`MarkdownEscaping`, in the `markdown-swift` package); the reverse
@@ -59,22 +81,89 @@ import Foundation
 ///   converter computes it from `Run.text` *after* swift-markdown has
 ///   already unescaped it. So escaping/unescaping is invisible to the
 ///   fingerprint by construction, not because normalization absorbs it.
-/// - **Whitespace *is* a real, documented source of difference**, which is
-///   exactly what steps 2-3 above absorb: multiple interior spaces,
-///   trailing whitespace, or a hard line break's trailing two spaces can
-///   all shift slightly across a markdown round-trip without the paragraph's
-///   actual content having changed. Collapsing whitespace keeps those
-///   incidental differences from registering as a false mismatch.
+/// - **Whitespace differences are real and absorbed by steps 3-4**:
+///   multiple interior spaces, trailing whitespace, or a hard line break's
+///   trailing two spaces can all shift slightly across a markdown
+///   round-trip without the paragraph's actual content having changed.
+/// - **Smart punctuation is real and absorbed by step 2 — discovered
+///   empirically, not theoretically.** swift-markdown's `Document(parsing:)`
+///   enables cmark's "smart" option set by default (no `.disableSmartOpts`
+///   passed anywhere in `md-to-word-swift`): parsing markdown source
+///   containing a literal straight apostrophe/quote, or an ASCII `--` /
+///   `---` / `...` sequence, silently rewrites it to the corresponding
+///   Unicode typographic character — verified by round-tripping
+///   `"This paragraph's real text."` through
+///   `MarkdownToWordConverter.convertMarkdown` and observing the straight
+///   `'` come back as U+2019 (curly right single quote). Since apostrophes
+///   and straight quotes are near-ubiquitous in ordinary prose, leaving
+///   this unhandled would make the fingerprint mismatch on nearly every
+///   real paragraph containing a contraction or possessive — a
+///   false-positive rate that would defeat the feature's purpose. Folding
+///   both the ASCII and the Unicode typographic form down to the same
+///   canonical ASCII representation makes the fingerprint correctly match
+///   across that specific, deterministic parser behavior.
+/// - **Residual, documented gap**: this canonicalization is intentionally
+///   lossy — a paragraph that genuinely started with a literal Unicode em
+///   dash will now fingerprint identically to one that started with literal
+///   `---`. That is an accepted trade-off (misalignment detection needs to
+///   tolerate this one parser behavior; distinguishing those two literal
+///   inputs is not a goal). Other smart-punctuation-adjacent substitutions
+///   cmark may perform in less common contexts are not separately
+///   inventoried here; if a future false-mismatch is traced to one, extend
+///   this list (and the matching macdoc copy + shared test vectors)
+///   accordingly rather than special-casing it ad hoc.
 /// - **An actual content edit (insertion, deletion, or replacement of
-///   non-whitespace text) always changes the fingerprint.** This is a
-///   content-drift detector, not a byte-exact round-trip checksum: it is
-///   deliberately insensitive to the whitespace noise above while staying
-///   sensitive to any edit a human or tool made to the paragraph's text.
+///   non-whitespace, non-typographic text) always changes the fingerprint.**
+///   This is a content-drift detector, not a byte-exact round-trip
+///   checksum: it is deliberately insensitive to the noise above while
+///   staying sensitive to any edit a human or tool made to the paragraph's
+///   actual wording.
 enum ParagraphFingerprint {
-    /// Computes the fingerprint for a paragraph's already-concatenated run
-    /// text (callers pass `paragraph.runs.map(\.text).joined()`).
+    /// Unicode "smart punctuation" scalar → canonical ASCII replacement.
+    /// See the "Smart punctuation" bullet above for why this exists.
+    private static let typographicCanonicalization: [Unicode.Scalar: String] = [
+        "\u{2018}": "'", "\u{2019}": "'", "\u{201A}": "'", "\u{201B}": "'", // single quote family
+        "\u{201C}": "\"", "\u{201D}": "\"", "\u{201E}": "\"", "\u{201F}": "\"", // double quote family
+        "\u{2013}": "--",   // en dash
+        "\u{2014}": "---",  // em dash
+        "\u{2026}": "...",  // horizontal ellipsis
+    ]
+
+    /// Computes the "loose" fingerprint for a paragraph's already-concatenated
+    /// run text (callers pass `paragraph.runs.map(\.text).joined()`). Tolerant
+    /// of the whitespace-collapsing and typographic-canonicalization noise
+    /// described above — appropriate for "is this roughly the same paragraph"
+    /// misalignment detection, NOT sufficient on its own for validating that
+    /// `RunMeta.range` character offsets are still safe to apply (see
+    /// `computeExact` below).
     static func compute(_ runsText: String) -> String {
         fnv1a64Hex(normalize(runsText))
+    }
+
+    /// Computes the "exact" fingerprint: hashes `runsText` with NO
+    /// normalization at all (not NFC, not whitespace collapsing, not
+    /// typographic canonicalization) — two texts sharing this fingerprint
+    /// are guaranteed character-for-character (Swift `Character`, i.e.
+    /// extended-grapheme-cluster) identical.
+    ///
+    /// This is the fingerprint `RunMeta.range` character-offset restoration
+    /// (macdoc #220 item 4) must gate on, NOT `compute(_:)` above. Both
+    /// whitespace collapsing and typographic canonicalization are
+    /// *length-changing* transformations (e.g. `"  "` → `" "`, or `"---"`
+    /// (3 chars) ↔ `"—"` (1 char)): two texts can normalize to the same
+    /// "loose" fingerprint while having different lengths or different
+    /// character positions, which silently invalidates — or worse, shifts —
+    /// offsets captured against the *other* text. Concretely: original text
+    /// `"a---bc"` with a `RunMeta.range` of `[4, 5)` (targeting `"b"`)
+    /// round-trips through markdown to `"a—bc"` (smart-punctuation
+    /// substitution, unrelated to any real edit); the *loose* fingerprint of
+    /// both strings is identical, but `[4, 5)` against `"a—bc"` is out of
+    /// bounds (length 4) — or, with more trailing text, could land on a
+    /// *different* character than `"b"` entirely, silently formatting the
+    /// wrong text. `computeExact` closes that gap: it only reports a match
+    /// when the offsets are guaranteed still valid.
+    static func computeExact(_ runsText: String) -> String {
+        fnv1a64Hex(runsText)
     }
 
     /// Exposed for the two-repo shared literal-test-vector contract
@@ -86,6 +175,11 @@ enum ParagraphFingerprint {
         result.reserveCapacity(nfc.count)
         var lastWasWhitespace = false
         for scalar in nfc.unicodeScalars {
+            if let replacement = typographicCanonicalization[scalar] {
+                result += replacement
+                lastWasWhitespace = false
+                continue
+            }
             if CharacterSet.whitespacesAndNewlines.contains(scalar) {
                 if !lastWasWhitespace {
                     result.unicodeScalars.append(" ")

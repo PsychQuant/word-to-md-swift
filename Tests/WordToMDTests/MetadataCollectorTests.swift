@@ -376,4 +376,22 @@ final class MetadataCollectorTests: XCTestCase {
         let yamlB = try fingerprintYAML(for: "A completely different sentence")
         XCTAssertNotEqual(yamlA, yamlB)
     }
+
+    func testParagraphAlsoGetsAnExactTextFingerprint() throws {
+        var collector = MetadataCollector()
+
+        var doc = WordDocument()
+        var props = ParagraphProperties()
+        props.alignment = .center
+        doc.appendParagraph(Paragraph(text: "Centered paragraph text", properties: props))
+        collector.collectDocument(doc)
+
+        for (index, child) in doc.body.children.enumerated() {
+            collector.collectElement(child, index: index)
+        }
+
+        let yaml = try makeYAML(from: collector)
+        let expected = ParagraphFingerprint.computeExact("Centered paragraph text")
+        XCTAssertTrue(yaml.contains("exactTextFingerprint: \"\(expected)\""), "got:\n\(yaml)")
+    }
 }
