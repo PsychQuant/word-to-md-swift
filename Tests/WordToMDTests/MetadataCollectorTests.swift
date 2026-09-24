@@ -17,6 +17,57 @@ final class MetadataCollectorTests: XCTestCase {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
+    // MARK: - RunMeta.range is scalar-based, not Character-based
+    // (PsychQuant/macdoc#220 item 4 follow-up, Codex round 2 NEW-1)
+
+    func testRunMetaRangeIsMeasuredInUnicodeScalarsNotCharacters() throws {
+        // A base letter and a combining acute accent, split across two
+        // separately-formatted runs — each is its own single `Character`
+        // when counted in isolation (`"a".count == 1`,
+        // `"\u{0301}".count == 1`), so a naive per-run `Character`-count sum
+        // would place "bc" at offset 2. If instead measured in Unicode
+        // scalars (also 1 + 1 here), the offset is the same in THIS
+        // fixture — the divergence only shows up once something reads
+        // these offsets back against a *recombined* string (see the
+        // reverse-side Tier3MetadataRestorer test in macdoc for the
+        // scenario where that recombination actually changes the
+        // Character-based count). This test instead pins the forward-side
+        // contract directly: scalar count, asserted via an example where
+        // `Character` count and `unicodeScalars` count of a SINGLE run
+        // already disagree, so the two coordinate systems are
+        // distinguishable within this one test.
+        var collector = MetadataCollector()
+
+        var doc = WordDocument()
+        var boldProps = RunProperties(bold: true)
+        boldProps.fontName = "Arial"
+        // "é" as a single precomposed Character, but the run's underlying
+        // Swift String can still be inspected at the scalar level: a
+        // precomposed "é" (U+00E9) is ALSO exactly 1 scalar, so use a
+        // decomposed sequence instead ("e" + COMBINING ACUTE ACCENT,
+        // U+0065 U+0301) — 1 Character (grapheme cluster), but 2 scalars.
+        let decomposedE = "e\u{0301}"
+        XCTAssertEqual(decomposedE.count, 1, "Fixture assumption: base+combining-mark forms ONE Character")
+        XCTAssertEqual(decomposedE.unicodeScalars.count, 2, "Fixture assumption: base+combining-mark is TWO scalars")
+
+        let run1 = Run(text: decomposedE, properties: boldProps)
+        let colorProps = RunProperties(color: "FF0000")
+        let run2 = Run(text: "xyz", properties: colorProps)
+        doc.appendParagraph(Paragraph(runs: [run1, run2]))
+        collector.collectDocument(doc)
+
+        for (index, child) in doc.body.children.enumerated() {
+            collector.collectElement(child, index: index)
+        }
+
+        let yaml = try makeYAML(from: collector)
+        // If range were Character-count-based, run1 (1 Character) would end
+        // at offset 1, placing run2 at [1, 4). Scalar-count-based, run1 (2
+        // scalars) ends at offset 2, placing run2 at [2, 5).
+        XCTAssertTrue(yaml.contains("range: [0, 2]"), "run1 (decomposed é) should span scalar offsets [0, 2); got:\n\(yaml)")
+        XCTAssertTrue(yaml.contains("range: [2, 5]"), "run2 (\"xyz\") should start at scalar offset 2, not Character offset 1; got:\n\(yaml)")
+    }
+
     // MARK: - Bug Fix: characterSpacing
 
     func testCharacterSpacingIsWrittenToYAML() throws {

@@ -153,7 +153,27 @@ struct MetadataCollector {
         // Run-level Layer C 屬性
         var offset = 0
         for run in para.runs {
-            let length = run.text.count
+            // PsychQuant/macdoc#220 item 4 follow-up (Codex round 2 NEW-1):
+            // count in Unicode SCALARS, not Swift `Character`s (extended
+            // grapheme clusters). A combining-character sequence (base +
+            // combining mark) split across two differently-formatted runs
+            // has each half as its own single `Character` when counted in
+            // isolation (`"a".count == 1`, `"\u{0301}".count == 1`), but if
+            // the reverse converter's run segmentation later coalesces them
+            // into one run, `"a\u{0301}"` becomes ONE `Character` in the
+            // combined string (Swift merges a base + trailing combining
+            // mark into a single extended grapheme cluster). Summing
+            // per-run `Character` counts would then disagree with the
+            // combined text's own `Character` count by exactly the number
+            // of such merges — silently shifting every later offset in the
+            // paragraph. Unicode scalars have no such merging behavior:
+            // concatenating scalar sequences and counting scalars always
+            // equals the sum of each piece's own scalar count, regardless
+            // of run boundaries or how the reverse side happens to segment
+            // its own runs. See `RunMeta.range`'s doc comment and
+            // `Tier3MetadataRestorer.applyRunFormatting` (macdoc) for the
+            // matching reverse-side scalar-based splitting.
+            let length = run.text.unicodeScalars.count
             if hasLayerCProperties(run.properties) {
                 var runMeta = RunMeta(range: [offset, offset + length])
                 runMeta.fontName = run.properties.fontName
@@ -556,7 +576,17 @@ struct IndentationMeta {
 }
 
 struct RunMeta {
-    let range: [Int]  // [start, end]
+    /// `[start, end)` offset pair into the paragraph's concatenated run
+    /// text, measured in **Unicode scalars** (`String.unicodeScalars`), NOT
+    /// Swift `Character`s (extended grapheme clusters) — see
+    /// `collectParagraph`'s computation of `length` for why: scalar counts
+    /// are additive across run boundaries (concatenating scalar sequences
+    /// and counting scalars always equals the sum of the pieces' own scalar
+    /// counts), while `Character` counts are not (a combining-character
+    /// sequence split across two runs counts as 2 `Character`s in isolation
+    /// but can merge into 1 if a later reconstruction coalesces the runs).
+    /// PsychQuant/macdoc#220 item 4 follow-up (Codex round 2 NEW-1).
+    let range: [Int]
     var fontName: String?
     var fontSize: Int?
     var color: String?
