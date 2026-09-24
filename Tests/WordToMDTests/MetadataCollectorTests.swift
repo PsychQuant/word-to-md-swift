@@ -282,4 +282,98 @@ final class MetadataCollectorTests: XCTestCase {
         XCTAssertTrue(yaml.contains("shading:"))
         XCTAssertTrue(yaml.contains("fill: \"FFFF00\""))
     }
+
+    // MARK: - lineRule (PsychQuant/macdoc#220 item 1)
+
+    func testSpacingLineRuleIsWrittenToYAML() throws {
+        var collector = MetadataCollector()
+
+        var doc = WordDocument()
+        var props = ParagraphProperties()
+        props.spacing = Spacing(before: 240, after: 120, line: 360, lineRule: .exact)
+        doc.appendParagraph(Paragraph(text: "Exact line spacing", properties: props))
+        collector.collectDocument(doc)
+
+        for (index, child) in doc.body.children.enumerated() {
+            collector.collectElement(child, index: index)
+        }
+
+        let yaml = try makeYAML(from: collector)
+        XCTAssertTrue(yaml.contains("spacing:"))
+        XCTAssertTrue(yaml.contains("lineRule: exact"), "lineRule must appear inside the spacing map; got:\n\(yaml)")
+    }
+
+    func testSpacingWithoutLineRuleOmitsTheField() throws {
+        var collector = MetadataCollector()
+
+        var doc = WordDocument()
+        var props = ParagraphProperties()
+        props.spacing = Spacing(before: 240) // no lineRule set
+        doc.appendParagraph(Paragraph(text: "No line rule", properties: props))
+        collector.collectDocument(doc)
+
+        for (index, child) in doc.body.children.enumerated() {
+            collector.collectElement(child, index: index)
+        }
+
+        let yaml = try makeYAML(from: collector)
+        XCTAssertFalse(yaml.contains("lineRule"), "lineRule must not appear when the original spacing had none; got:\n\(yaml)")
+    }
+
+    func testAllThreeLineRuleValuesRoundTripToYAML() throws {
+        for (rule, expected) in [(LineRule.auto, "auto"), (.exact, "exact"), (.atLeast, "atLeast")] {
+            var collector = MetadataCollector()
+            var doc = WordDocument()
+            var props = ParagraphProperties()
+            props.spacing = Spacing(line: 240, lineRule: rule)
+            doc.appendParagraph(Paragraph(text: "Line rule \(expected)", properties: props))
+            collector.collectDocument(doc)
+            for (index, child) in doc.body.children.enumerated() {
+                collector.collectElement(child, index: index)
+            }
+            let yaml = try makeYAML(from: collector)
+            XCTAssertTrue(yaml.contains("lineRule: \(expected)"), "Expected lineRule: \(expected) in:\n\(yaml)")
+        }
+    }
+
+    // MARK: - textFingerprint (PsychQuant/macdoc#220 item 5)
+
+    func testParagraphWithLayerCPropertyGetsATextFingerprint() throws {
+        var collector = MetadataCollector()
+
+        var doc = WordDocument()
+        var props = ParagraphProperties()
+        props.alignment = .center
+        doc.appendParagraph(Paragraph(text: "Centered paragraph text", properties: props))
+        collector.collectDocument(doc)
+
+        for (index, child) in doc.body.children.enumerated() {
+            collector.collectElement(child, index: index)
+        }
+
+        let yaml = try makeYAML(from: collector)
+        XCTAssertTrue(yaml.contains("textFingerprint:"), "Every recorded paragraph entry must carry a textFingerprint; got:\n\(yaml)")
+
+        let expected = ParagraphFingerprint.compute("Centered paragraph text")
+        XCTAssertTrue(yaml.contains("textFingerprint: \"\(expected)\""), "Fingerprint must match ParagraphFingerprint.compute over the paragraph's run text; got:\n\(yaml)")
+    }
+
+    func testDifferentParagraphTextProducesDifferentFingerprintInYAML() throws {
+        func fingerprintYAML(for text: String) throws -> String {
+            var collector = MetadataCollector()
+            var doc = WordDocument()
+            var props = ParagraphProperties()
+            props.alignment = .center
+            doc.appendParagraph(Paragraph(text: text, properties: props))
+            collector.collectDocument(doc)
+            for (index, child) in doc.body.children.enumerated() {
+                collector.collectElement(child, index: index)
+            }
+            return try makeYAML(from: collector)
+        }
+
+        let yamlA = try fingerprintYAML(for: "First version of the text")
+        let yamlB = try fingerprintYAML(for: "A completely different sentence")
+        XCTAssertNotEqual(yamlA, yamlB)
+    }
 }

@@ -117,8 +117,15 @@ struct MetadataCollector {
         }
 
         var meta = ParagraphMeta(index: index)
+        // PsychQuant/macdoc#220 item 5: content-addressed fingerprint over
+        // the paragraph's top-level run text (same text RunMeta.range below
+        // is offset against), so the reverse converter can detect when this
+        // entry's `index` no longer points at the paragraph it was captured
+        // against. See ParagraphFingerprint's doc comment for the full
+        // rationale and the cross-repo contract with macdoc's mirror copy.
+        meta.textFingerprint = ParagraphFingerprint.compute(para.runs.map(\.text).joined())
         meta.alignment = props.alignment?.rawValue
-        meta.spacing = props.spacing.map { SpacingMeta(before: $0.before, after: $0.after, line: $0.line) }
+        meta.spacing = props.spacing.map { SpacingMeta(before: $0.before, after: $0.after, line: $0.line, lineRule: $0.lineRule?.rawValue) }
         meta.indentation = props.indentation.map { IndentationMeta(left: $0.left, right: $0.right, firstLine: $0.firstLine, hanging: $0.hanging) }
         meta.commentIds = para.commentIds.isEmpty ? nil : para.commentIds
         meta.bookmarkNames = para.bookmarks.isEmpty ? nil : para.bookmarks.map { $0.name }
@@ -321,6 +328,9 @@ struct MetadataCollector {
             lines.append("paragraphs:")
             for para in paragraphMeta {
                 lines.append("  - index: \(para.index)")
+                if let fingerprint = para.textFingerprint {
+                    lines.append("    textFingerprint: \"\(fingerprint)\"")
+                }
                 if let alignment = para.alignment {
                     lines.append("    alignment: \(alignment)")
                 }
@@ -329,6 +339,7 @@ struct MetadataCollector {
                     if let before = spacing.before { spacingParts.append("before: \(before)") }
                     if let after = spacing.after { spacingParts.append("after: \(after)") }
                     if let line = spacing.line { spacingParts.append("line: \(line)") }
+                    if let lineRule = spacing.lineRule { spacingParts.append("lineRule: \(lineRule)") }
                     lines.append("    spacing: { \(spacingParts.joined(separator: ", ")) }")
                 }
                 if let indent = para.indentation {
@@ -458,6 +469,12 @@ struct NumberingLevelMeta {
 
 struct ParagraphMeta {
     let index: Int
+    /// PsychQuant/macdoc#220 item 5: content-addressed fingerprint of this
+    /// paragraph's run text — see `ParagraphFingerprint`. Always populated
+    /// for every recorded entry (any `ParagraphMeta` in `paragraphMeta` was
+    /// already qualified as "worth recording" by `collectParagraph`'s guard,
+    /// so computing this unconditionally costs nothing extra).
+    var textFingerprint: String?
     var alignment: String?
     var spacing: SpacingMeta?
     var indentation: IndentationMeta?
@@ -493,6 +510,19 @@ struct SpacingMeta {
     let before: Int?
     let after: Int?
     let line: Int?
+    /// PsychQuant/macdoc#220 item 1: `LineRule.rawValue` ("auto" / "exact" /
+    /// "atLeast"). Optional for backward compatibility — sidecars written
+    /// before this field existed simply omit it, which the reverse
+    /// converter treats as "no line rule to restore" (not "restore to
+    /// nil/clear"; see `Tier3MetadataRestorer`'s handling on the macdoc side).
+    let lineRule: String?
+
+    init(before: Int? = nil, after: Int? = nil, line: Int? = nil, lineRule: String? = nil) {
+        self.before = before
+        self.after = after
+        self.line = line
+        self.lineRule = lineRule
+    }
 }
 
 struct IndentationMeta {
