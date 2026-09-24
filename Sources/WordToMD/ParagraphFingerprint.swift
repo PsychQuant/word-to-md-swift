@@ -28,7 +28,7 @@ import Foundation
 ///
 /// The concatenation of `paragraph.runs.map(\.text)`, in run order — the
 /// *same* text `MetadataCollector.collectParagraph` already walks to
-/// compute `RunMeta.range` character offsets (top-level runs only;
+/// compute `RunMeta.range` scalar offsets (top-level runs only;
 /// hyperlink / footnote / SDT text is deliberately excluded, matching
 /// `RunMeta`'s existing scope).
 ///
@@ -42,9 +42,9 @@ import Foundation
 ///   (whitespace collapsing, typographic canonicalization) — appropriate
 ///   for "is this still roughly the same paragraph" misalignment detection
 ///   (macdoc #220 item 5), which gates paragraph-*level* fields
-///   (alignment/spacing/etc. — none of which depend on character offsets).
+///   (alignment/spacing/etc. — none of which depend on scalar offsets).
 /// - `computeExact(_:)` requires byte-for-byte identical text — this is
-///   the ONLY fingerprint that guarantees `RunMeta.range` character offsets
+///   the ONLY fingerprint that guarantees `RunMeta.range` scalar offsets
 ///   are still valid, because the loose fingerprint's normalization steps
 ///   are length-changing and can silently shift or invalidate offsets even
 ///   when it matches. Per-run restoration (macdoc #220 item 4) MUST gate on
@@ -147,7 +147,7 @@ enum ParagraphFingerprint {
     /// of the whitespace-collapsing and typographic-canonicalization noise
     /// described above — appropriate for "is this roughly the same paragraph"
     /// misalignment detection, NOT sufficient on its own for validating that
-    /// `RunMeta.range` character offsets are still safe to apply (see
+    /// `RunMeta.range` scalar offsets are still safe to apply (see
     /// `computeExact` below).
     static func compute(_ runsText: String) -> String {
         fnv1a64Hex(normalize(runsText))
