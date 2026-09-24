@@ -8,7 +8,7 @@ let package = Package(
         .library(name: "WordToMD", targets: ["WordToMD"])
     ],
     dependencies: [
-        .package(url: "https://github.com/PsychQuant/common-converter-swift.git", from: "0.4.0"),
+        .package(url: "https://github.com/PsychQuant/common-converter-swift.git", from: "0.5.0"),
         .package(url: "https://github.com/PsychQuant/ooxml-swift.git", "2.0.0"..<"4.0.0"),
         .package(url: "https://github.com/PsychQuant/markdown-swift.git", from: "0.1.0"),
     ],

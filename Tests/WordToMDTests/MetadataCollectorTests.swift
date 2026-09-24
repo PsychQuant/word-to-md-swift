@@ -1,4 +1,5 @@
 import XCTest
+import CommonConverterSwift
 import OOXMLSwift
 @testable import WordToMD
 
@@ -405,8 +406,8 @@ final class MetadataCollectorTests: XCTestCase {
         let yaml = try makeYAML(from: collector)
         XCTAssertTrue(yaml.contains("textFingerprint:"), "Every recorded paragraph entry must carry a textFingerprint; got:\n\(yaml)")
 
-        let expected = ParagraphFingerprint.compute("Centered paragraph text")
-        XCTAssertTrue(yaml.contains("textFingerprint: \"\(expected)\""), "Fingerprint must match ParagraphFingerprint.compute over the paragraph's run text; got:\n\(yaml)")
+        let expected = ParagraphFingerprint.loose("Centered paragraph text")
+        XCTAssertTrue(yaml.contains("textFingerprint: \"\(expected)\""), "Fingerprint must match ParagraphFingerprint.loose over the paragraph's run text; got:\n\(yaml)")
     }
 
     func testDifferentParagraphTextProducesDifferentFingerprintInYAML() throws {
@@ -442,7 +443,7 @@ final class MetadataCollectorTests: XCTestCase {
         }
 
         let yaml = try makeYAML(from: collector)
-        let expected = ParagraphFingerprint.computeExact("Centered paragraph text")
+        let expected = ParagraphFingerprint.exact("Centered paragraph text")
         XCTAssertTrue(yaml.contains("exactTextFingerprint: \"\(expected)\""), "got:\n\(yaml)")
     }
 }

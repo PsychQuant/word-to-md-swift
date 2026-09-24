@@ -1,3 +1,4 @@
+import CommonConverterSwift
 import Foundation
 import OOXMLSwift
 
@@ -126,8 +127,8 @@ struct MetadataCollector {
         // paragraph-level fields, `exactTextFingerprint` (byte-exact) is the
         // only one safe to gate `runs` restoration on.
         let runsText = para.runs.map(\.text).joined()
-        meta.textFingerprint = ParagraphFingerprint.compute(runsText)
-        meta.exactTextFingerprint = ParagraphFingerprint.computeExact(runsText)
+        meta.textFingerprint = ParagraphFingerprint.loose(runsText)
+        meta.exactTextFingerprint = ParagraphFingerprint.exact(runsText)
         meta.alignment = props.alignment?.rawValue
         meta.spacing = props.spacing.map { SpacingMeta(before: $0.before, after: $0.after, line: $0.line, lineRule: $0.lineRule?.rawValue) }
         meta.indentation = props.indentation.map { IndentationMeta(left: $0.left, right: $0.right, firstLine: $0.firstLine, hanging: $0.hanging) }
