@@ -5,8 +5,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/PsychQuant/common-converter-swift.git",
       "state" : {
-        "revision" : "53400b2032389962dc5a10d135644b21d3cf1e06",
-        "version" : "0.4.0"
+        "revision" : "15a72f5498a43466b9180ca2e064d2bd23799770",
+        "version" : "0.5.0"
       }
     },
     {
